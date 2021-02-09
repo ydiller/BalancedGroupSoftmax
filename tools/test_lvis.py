@@ -3,6 +3,7 @@ import os
 import os.path as osp
 import shutil
 import tempfile
+import json
 import pdb
 import numpy as np
 import pickle
@@ -23,20 +24,25 @@ from mmdet.core import build_assigner
 def single_gpu_test(model, data_loader, show=False, cfg=None):
     model.eval()
     results = []
+    logits_list = []
     dataset = data_loader.dataset
     prog_bar = mmcv.ProgressBar(len(dataset))
     for i, data in enumerate(data_loader):
-        with torch.no_grad():
-            result = model(return_loss=False, rescale=not show, **data)
-        results.append(result)
+        if i<2:
+            with torch.no_grad():
+                bbox_results, bboxes_logits = model(return_loss=False, rescale=not show, **data)
+            results.append(bbox_results)
+            logits_list.append(bboxes_logits)
 
-        if show:
-            model.module.show_result(data, result)
+            if show:
+                model.module.show_result(data, bbox_results)
 
-        batch_size = data['img'][0].size(0)
-        for _ in range(batch_size):
-            prog_bar.update()
-    return results
+            batch_size = data['img'][0].size(0)
+            for _ in range(batch_size):
+                prog_bar.update()
+        else:
+            break
+    return results, logits_list  # return also class. logits
 
 def multi_gpu_test(model, data_loader, tmpdir=None):
     model.eval()
@@ -158,6 +164,20 @@ def reweight_cls(model, tauuu):
 
     return model
 
+
+def logits2json(dataset, logits):
+    json_results = []
+    for idx in range(len(dataset)):
+        img_id = dataset.img_ids[idx]
+        logit = logits[idx]
+        for i in range(logit.shape[0]):
+            data = dict()
+            data['image_id'] = img_id
+            data['logits'] = logit
+            json_results.append(data)
+    return json_results
+
+
 def main():
     args = parse_args()
 
@@ -191,7 +211,7 @@ def main():
     data_loader = build_dataloader(
         dataset,
         imgs_per_gpu=1,
-        workers_per_gpu=cfg.data.workers_per_gpu,
+        workers_per_gpu=0,  # cfg.data.workers_per_gpu
         dist=distributed,
         shuffle=False)
 
@@ -212,10 +232,15 @@ def main():
 
     if not distributed:
         model = MMDataParallel(model, device_ids=[0])
-        outputs = single_gpu_test(model, data_loader, args.show, cfg)
+        outputs, logits = single_gpu_test(model, data_loader, args.show, cfg)
     else:
         model = MMDistributedDataParallel(model.cuda())
         outputs = multi_gpu_test(model, data_loader, args.tmpdir)
+
+    # save logits in json file
+    logits_json = logits2json(dataset, logits)
+    with open('../../logits.json', 'w') as outfile:
+        json.dump(logits_json, outfile)
 
     rank, _ = get_dist_info()
     if args.out and rank == 0:
@@ -239,6 +264,8 @@ def main():
                         result_files = results2json(dataset, outputs_,
                                                     result_file)
                         lvis_eval(result_files, eval_types, dataset.lvis)
+
+
 
     # Save predictions in the COCO json format
     if args.json_out and rank == 0:

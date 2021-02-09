@@ -2,6 +2,7 @@ from ..registry import DETECTORS
 # from .two_stage import TwoStageDetector
 from .faster_rcnn import FasterRCNN
 
+
 @DETECTORS.register_module
 class FL_FasterRCNN(FasterRCNN):
 

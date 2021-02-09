@@ -3,6 +3,7 @@ from .cascade_rcnn import CascadeRCNN
 from .double_head_rcnn import DoubleHeadRCNN
 from .fast_rcnn import FastRCNN
 from .faster_rcnn import FasterRCNN
+from .fl_faster_rcnn import FL_FasterRCNN
 from .fcos import FCOS
 from .fovea import FOVEA
 from .grid_rcnn import GridRCNN
@@ -19,7 +20,7 @@ from .DCM import DCM
 
 __all__ = [
     'BaseDetector', 'SingleStageDetector', 'TwoStageDetector', 'RPN',
-    'FastRCNN', 'FasterRCNN', 'MaskRCNN', 'CascadeRCNN', 'HybridTaskCascade',
+    'FastRCNN', 'FasterRCNN', 'FL_FasterRCNN', 'MaskRCNN', 'CascadeRCNN', 'HybridTaskCascade',
     'DoubleHeadRCNN', 'RetinaNet', 'FCOS', 'GridRCNN', 'MaskScoringRCNN',
     'RepPointsDetector', 'FOVEA', 'GroupSoftmax', 'DCM'
 ]

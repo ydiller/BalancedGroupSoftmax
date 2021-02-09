@@ -61,11 +61,11 @@ class BBoxTestMixin(object):
             cfg=None)
         # cfg=rcnn_test_cfg)
 
-        det_bboxes, det_labels = multiclass_nms(bboxes, scores,
+        det_bboxes, det_labels, bboxes_logits = multiclass_nms(bboxes, scores,
                                                 rcnn_test_cfg.score_thr,
                                                 rcnn_test_cfg.nms,
                                                 rcnn_test_cfg.max_per_img)
-        return det_bboxes, det_labels, scores
+        return det_bboxes, det_labels, scores, bboxes_logits
 
     def update_scores_with_reweight(self, scores, scores_reweight):
 
