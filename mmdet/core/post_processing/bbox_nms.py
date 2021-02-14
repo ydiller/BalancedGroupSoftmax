@@ -45,18 +45,18 @@ def multiclass_nms(multi_bboxes,
         if score_factors is not None:
             _scores *= score_factors[cls_inds]
         cls_dets = torch.cat([_bboxes, _scores[:, None]], dim=1)
-        cls_dets, _ = nms_op(cls_dets, **nms_cfg_)
+        cls_dets, indices = nms_op(cls_dets, **nms_cfg_)
+        cls_dets = torch.cat([cls_dets, indices[:, None].float()], dim=1)
         cls_labels = multi_bboxes.new_full((cls_dets.shape[0], ),
                                            i - 1,
                                            dtype=torch.long)
         bboxes.append(cls_dets)
         labels.append(cls_labels)
-    bboxes_logits = bboxes
     if bboxes:
         bboxes = torch.cat(bboxes)
         labels = torch.cat(labels)
         if bboxes.shape[0] > max_num:
-            _, inds = bboxes[:, -1].sort(descending=True)
+            _, inds = bboxes[:, -2].sort(descending=True)  # at original file: bboxes[:, -1]
             inds = inds[:max_num]
             bboxes = bboxes[inds]
             labels = labels[inds]
@@ -64,4 +64,4 @@ def multiclass_nms(multi_bboxes,
         bboxes = multi_bboxes.new_zeros((0, 5))
         labels = multi_bboxes.new_zeros((0, ), dtype=torch.long)
 
-    return bboxes, labels, bboxes_logits
+    return bboxes, labels

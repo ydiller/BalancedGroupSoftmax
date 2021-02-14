@@ -2,6 +2,7 @@ import argparse
 import os
 import json
 import mmcv
+import pickle
 from mmdet.core import lvis_eval
 from mmdet.datasets import build_dataloader, build_dataset
 
@@ -48,19 +49,17 @@ def main():
         shuffle=False)
     gt_list = []
     for i, data in enumerate(data_loader):  # original script in test_lvis_tnorm.py
+        print(i)
         img_id = dataset.img_infos[i]['id']
         gt = dataset.get_ann_info(i)
         gt_dict = dict()
         gt_dict['id'] = img_id
         gt_dict['bboxes'] = gt['bboxes']
         gt_dict['labels'] = gt['labels']
-        gt_list.append[gt_dict]
+        gt_list.append(gt_dict)
 
-    with open('../../logits.json', 'w') as logits_file:
-        logits = json.load(logits_file)
-
-    with open('../../bbox.json', 'w') as bbox_file:
-        bbox = json.load(bbox_file)
+    with open('../ground_truths.p', 'wb') as outfile:
+        pickle.dump(gt_list, outfile)
 
 if __name__ == '__main__':
     main()

@@ -28,20 +28,19 @@ def single_gpu_test(model, data_loader, show=False, cfg=None):
     dataset = data_loader.dataset
     prog_bar = mmcv.ProgressBar(len(dataset))
     for i, data in enumerate(data_loader):
-        if i<2:
-            with torch.no_grad():
-                bbox_results, bboxes_logits = model(return_loss=False, rescale=not show, **data)
-            results.append(bbox_results)
-            logits_list.append(bboxes_logits)
+        with torch.no_grad():
+            bbox_results, det_bboxes, scores = model(return_loss=False, rescale=not show, **data)
+            det_bboxes = det_bboxes.detach().cpu()
+            scores = scores.detach().cpu()
+        results.append(bbox_results)
+        logits_list.append((det_bboxes, scores))
 
-            if show:
-                model.module.show_result(data, bbox_results)
+        if show:
+            model.module.show_result(data, bbox_results)
 
-            batch_size = data['img'][0].size(0)
-            for _ in range(batch_size):
-                prog_bar.update()
-        else:
-            break
+        batch_size = data['img'][0].size(0)
+        for _ in range(batch_size):
+            prog_bar.update()
     return results, logits_list  # return also class. logits
 
 def multi_gpu_test(model, data_loader, tmpdir=None):
@@ -165,17 +164,29 @@ def reweight_cls(model, tauuu):
     return model
 
 
-def logits2json(dataset, logits):
+def logits_process(logits):
     json_results = []
-    for idx in range(len(dataset)):
-        img_id = dataset.img_ids[idx]
-        logit = logits[idx]
-        for i in range(logit.shape[0]):
-            data = dict()
-            data['image_id'] = img_id
-            data['logits'] = logit
-            json_results.append(data)
-    return json_results
+    all_bboxes_logits = []
+    for image in logits:
+        image_bboxes_logits = []
+        for i, bbox in enumerate(image[0]):
+            bboxes_logits_dict = dict()# image[0] = tensor including 300 bboxes
+            index = int(bbox[5].item())  # bbox[6] specifies the relevant line in the logits matrix
+            logits_vector = image[1][index]
+            bboxes_logits_dict['bbox'] = bbox[:4]
+            bboxes_logits_dict['score'] = bbox[4]
+            bboxes_logits_dict['logits'] = logits_vector
+            image_bboxes_logits.append(bboxes_logits_dict)
+        all_bboxes_logits.append(image_bboxes_logits)
+    # for idx in range(len(dataset)):
+    #     img_id = dataset.img_ids[idx]
+    #     logit = logits[idx]
+    #     for i in range(logit.shape[0]):
+    #         data = dict()
+    #         data['image_id'] = img_id
+    #         data['logits'] = logit
+    #         json_results.append(data)
+    return all_bboxes_logits
 
 
 def main():
@@ -237,10 +248,10 @@ def main():
         model = MMDistributedDataParallel(model.cuda())
         outputs = multi_gpu_test(model, data_loader, args.tmpdir)
 
-    # save logits in json file
-    logits_json = logits2json(dataset, logits)
-    with open('../../logits.json', 'w') as outfile:
-        json.dump(logits_json, outfile)
+    # preprocess logits and save them on json file
+    logits_data = logits_process(logits)
+    with open('../logits.p', 'wb') as outfile:
+        pickle.dump(logits_data, outfile)
 
     rank, _ = get_dist_info()
     if args.out and rank == 0:
