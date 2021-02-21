@@ -135,6 +135,8 @@ def proposal2json(dataset, results):
 def det2json(dataset, results):
     json_results = []
     for idx in range(len(dataset)):
+        # if idx > 3:  # temporary condition for testing
+        #     break
         img_id = dataset.img_ids[idx]
         result = results[idx]
         for label in range(len(result)):

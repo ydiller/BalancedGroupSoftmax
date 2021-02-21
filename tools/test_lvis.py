@@ -18,8 +18,8 @@ from mmdet.apis import init_dist
 from mmdet.core import lvis_eval, results2json, wrap_fp16_model
 from mmdet.datasets import build_dataloader, build_dataset
 from mmdet.models import build_detector
-
 from mmdet.core import build_assigner
+from utils import filter_logits_by_gt
 
 def single_gpu_test(model, data_loader, show=False, cfg=None):
     model.eval()
@@ -28,6 +28,8 @@ def single_gpu_test(model, data_loader, show=False, cfg=None):
     dataset = data_loader.dataset
     prog_bar = mmcv.ProgressBar(len(dataset))
     for i, data in enumerate(data_loader):
+        # if i > 3:   # temporary condition for testing
+        #     break
         with torch.no_grad():
             bbox_results, det_bboxes, scores = model(return_loss=False, rescale=not show, **data)
             det_bboxes = det_bboxes.detach().cpu()
@@ -165,28 +167,40 @@ def reweight_cls(model, tauuu):
 
 
 def logits_process(logits):
-    json_results = []
-    all_bboxes_logits = []
-    for image in logits:
-        image_bboxes_logits = []
-        for i, bbox in enumerate(image[0]):
-            bboxes_logits_dict = dict()# image[0] = tensor including 300 bboxes
-            index = int(bbox[5].item())  # bbox[6] specifies the relevant line in the logits matrix
-            logits_vector = image[1][index]
-            bboxes_logits_dict['bbox'] = bbox[:4]
-            bboxes_logits_dict['score'] = bbox[4]
-            bboxes_logits_dict['logits'] = logits_vector
-            image_bboxes_logits.append(bboxes_logits_dict)
-        all_bboxes_logits.append(image_bboxes_logits)
+    """
+    Get the logits as a tuple of softmax logits and bounding boxes.
+    Rearranges it as a list in the length of bounding boxes number (default 300)
+    each list cell includes a dict of bounding box, confidence score, and logits vector.
+    """
+    # all_bboxes_logits = []
+    # for image in logits:
+    #     image_bboxes_logits = []
+    #     for i, bbox in enumerate(image[0]):
+    #         bboxes_logits_dict = dict()  # image[0] = tensor including 300 bboxes
+    #         index = int(bbox[5].item())  # bbox[6] specifies the relevant line in the logits matrix
+    #         logits_vector = image[1][index]
+    #         bboxes_logits_dict['bbox'] = bbox[:4]
+    #         bboxes_logits_dict['score'] = bbox[4]
+    #         bboxes_logits_dict['logits'] = logits_vector
+    #         image_bboxes_logits.append(bboxes_logits_dict)
+    #     all_bboxes_logits.append(image_bboxes_logits)
+
+
     # for idx in range(len(dataset)):
     #     img_id = dataset.img_ids[idx]
-    #     logit = logits[idx]
-    #     for i in range(logit.shape[0]):
-    #         data = dict()
-    #         data['image_id'] = img_id
-    #         data['logits'] = logit
-    #         json_results.append(data)
-    return all_bboxes_logits
+
+    logits_mat = np.zeros((5000, 300, 1231))
+    bboxes_mat = np.zeros((5000, 300, 4))
+    for i, image in enumerate(logits):
+        for j, bbox in enumerate(image[0]):  # image[0] = tensor including 300 bboxes
+            # bboxes_logits_dict = dict()
+            index = int(bbox[5].item())  # bbox[6] specifies the relevant line in the logits matrix
+            logits_vector = image[1][index]
+            # bbox_arr = np.array(bbox[:4])
+            bboxes_mat[i][j][:] = bbox[:4]
+            logits_mat[i][j] = np.array(logits_vector)
+
+    return bboxes_mat, logits_mat
 
 
 def main():
@@ -249,10 +263,29 @@ def main():
         outputs = multi_gpu_test(model, data_loader, args.tmpdir)
 
     # preprocess logits and save them on json file
-    logits_data = logits_process(logits)
-    with open('../logits.p', 'wb') as outfile:
-        pickle.dump(logits_data, outfile)
-
+    bboxes_mat, logits_mat = logits_process(logits)
+    # with open('../bboxes_mat.p', 'wb') as outfile:
+    #     pickle.dump(bboxes_mat, outfile)
+    # with open('../logits_mat.p', 'wb') as outfile2:
+    #     pickle.dump(logits_mat, outfile2)
+    gt_list = []
+    results_per_image = []
+    for i, data in enumerate(data_loader):  # original script in test_lvis_tnorm.py
+        # if i > 3:   # temporary condition for testing
+        #     break
+        print(i)
+        img_id = dataset.img_infos[i]['id']
+        gt = dataset.get_ann_info(i)
+        gt_dict = dict()
+        gt_dict['id'] = img_id
+        gt_dict['bboxes'] = gt['bboxes']
+        gt_dict['labels'] = gt['labels']
+        gt_list.append(gt_dict)
+        # filter logits according to equivalent ground truth
+        results = filter_logits_by_gt(bboxes_mat[i], logits_mat[i], gt_list[i])
+        results_per_image.append(results)
+    with open('../bboxes_logits.p', 'wb') as outfile:
+        pickle.dump(results_per_image, outfile)
     rank, _ = get_dist_info()
     if args.out and rank == 0:
         print('\nwriting results to {}'.format(args.out))
