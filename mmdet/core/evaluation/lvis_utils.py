@@ -11,7 +11,8 @@ import pickle
 ##a wrapper around LVISEval
 
 # TODO: using the config file ann path instead of a fix one.
-ANNOTATION_PATH = "./data/lvis/lvis_v0.5_val.json"
+ANNOTATION_PATH = "./data/lvis/lvis_v0.5_val.json"  # original
+# ANNOTATION_PATH = "./data/lvis/lvis_v0.5_train.json"
 
 def lvis_eval(result_files, result_types, lvis, max_dets=(100, 300, 1000), existing_json=None):
     for res_type in result_types:
@@ -44,7 +45,7 @@ def lvis_eval(result_files, result_types, lvis, max_dets=(100, 300, 1000), exist
         assert result_file.endswith('.json')
 
         iou_type = 'bbox' if res_type == 'proposal' else res_type
-        lvisEval = LVISEval(ANNOTATION_PATH, result_file, iou_type)
+        lvisEval = LVISEval(ANNOTATION_PATH, result_file, iou_type, max_dets)  # original - without max_dets
         # lvisEval.params.imgIds = img_ids
         if res_type == 'proposal':
             lvisEval.params.use_cats = 0

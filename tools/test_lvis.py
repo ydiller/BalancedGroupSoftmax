@@ -7,7 +7,7 @@ import json
 import pdb
 import numpy as np
 import pickle
-
+import pandas as pd
 import mmcv
 import torch
 import torch.distributed as dist
@@ -21,21 +21,30 @@ from mmdet.models import build_detector
 from mmdet.core import build_assigner
 from utils import filter_logits_by_gt
 
-def single_gpu_test(model, data_loader, show=False, cfg=None):
+TEMP_DATASET_SIZE = 5000
+
+def single_gpu_test(model, data_loader, show=False, cfg=None, index=0, img_meta=None):
     model.eval()
     results = []
     logits_list = []
     dataset = data_loader.dataset
     prog_bar = mmcv.ProgressBar(len(dataset))
     for i, data in enumerate(data_loader):
-        # if i > 3:   # temporary condition for testing
-        #     break
+    #     if i < TEMP_DATASET_SIZE*index:
+    #         continue
+    #     if i >= TEMP_DATASET_SIZE*(index+1):   # temporary condition for testing
+    #         break
         with torch.no_grad():
-            bbox_results, det_bboxes, scores = model(return_loss=False, rescale=not show, **data)
+            bbox_results, det_bboxes, det_labels, scores = model(return_loss=False, rescale=not show, **data)
             det_bboxes = det_bboxes.detach().cpu()
+            det_labels = det_labels.detach().cpu()
             scores = scores.detach().cpu()
+        # save original logits:
+        # filename = data['img_meta'][0].data[0][0]['filename'].split('/')[-1]  # get the file name, e.g: '000000397133.jpg'
+        # with open(f'test_logits/logits_per_img/{filename}.p', 'wb') as outfile:
+        #     pickle.dump(scores, outfile)
         results.append(bbox_results)
-        logits_list.append((det_bboxes, scores))
+        logits_list.append((det_bboxes, det_labels, scores))
 
         if show:
             model.module.show_result(data, bbox_results)
@@ -43,7 +52,7 @@ def single_gpu_test(model, data_loader, show=False, cfg=None):
         batch_size = data['img'][0].size(0)
         for _ in range(batch_size):
             prog_bar.update()
-    return results, logits_list  # return also class. logits
+    return results, logits_list  # return also class. logits and labels
 
 def multi_gpu_test(model, data_loader, tmpdir=None):
     model.eval()
@@ -134,6 +143,7 @@ def parse_args():
         help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--tau', type=float, default=0.0)
+    parser.add_argument('--data_index', type=int, default=0)
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -168,9 +178,11 @@ def reweight_cls(model, tauuu):
 
 def logits_process(logits):
     """
-    Get the logits as a tuple of softmax logits and bounding boxes.
-    Rearranges it as a list in the length of bounding boxes number (default 300)
-    each list cell includes a dict of bounding box, confidence score, and logits vector.
+    Get the logits as a tuple of softmax logits ,bounding boxes and labels.
+    Output: to matrices:
+    logits_mat in size (dataset, 300, 1231) - top 300 logits for each image.
+    bboxes_mat in size (dataset, 300, 4) - top 300 bboxes for each image.
+    labels_mat in size (dataset, 300, 1) - corresponding labels. 300 for each image.
     """
     # all_bboxes_logits = []
     # for image in logits:
@@ -189,23 +201,25 @@ def logits_process(logits):
     # for idx in range(len(dataset)):
     #     img_id = dataset.img_ids[idx]
 
-    logits_mat = np.zeros((5000, 300, 1231))
-    bboxes_mat = np.zeros((5000, 300, 4))
+    logits_mat = np.zeros((TEMP_DATASET_SIZE, 300, 1231))
+    bboxes_mat = np.zeros((TEMP_DATASET_SIZE, 300, 4))
+    labels_mat = np.zeros((TEMP_DATASET_SIZE, 300))
     for i, image in enumerate(logits):
         for j, bbox in enumerate(image[0]):  # image[0] = tensor including 300 bboxes
             # bboxes_logits_dict = dict()
-            index = int(bbox[5].item())  # bbox[6] specifies the relevant line in the logits matrix
-            logits_vector = image[1][index]
+            index = int(bbox[5].item())  # bbox[5] specifies the relevant line in the logits matrix
+            logits_vector = image[2][index]  # image[2] includes the scores
             # bbox_arr = np.array(bbox[:4])
             bboxes_mat[i][j][:] = bbox[:4]
             logits_mat[i][j] = np.array(logits_vector)
+        labels_mat[i] = image[1]  # image[1] includes the labels
 
-    return bboxes_mat, logits_mat
+    return bboxes_mat, labels_mat, logits_mat
 
 
 def main():
     args = parse_args()
-
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.data_index % 2)
     assert args.out or args.show or args.json_out, \
         ('Please specify at least one operation (save or show the results) '
          'with the argument "--out" or "--show" or "--json_out"')
@@ -232,14 +246,13 @@ def main():
 
     # build the dataloader
     # TODO: support multiple images per gpu (only minor changes are needed)
-    dataset = build_dataset(cfg.data.test)
+    dataset = build_dataset(cfg.data.test)  # original - test | changed to test_with_train_data
     data_loader = build_dataloader(
         dataset,
         imgs_per_gpu=1,
         workers_per_gpu=0,  # cfg.data.workers_per_gpu
         dist=distributed,
         shuffle=False)
-
     # build the model and load checkpoint
     model = build_detector(cfg.model, train_cfg=None, test_cfg=cfg.test_cfg)
     fp16_cfg = cfg.get('fp16', None)
@@ -257,35 +270,61 @@ def main():
 
     if not distributed:
         model = MMDataParallel(model, device_ids=[0])
-        outputs, logits = single_gpu_test(model, data_loader, args.show, cfg)
+        outputs, logits = single_gpu_test(model, data_loader, args.show, cfg, args.data_index)
     else:
         model = MMDistributedDataParallel(model.cuda())
         outputs = multi_gpu_test(model, data_loader, args.tmpdir)
 
+    # save outputs as csv:
+    # pd.DataFrame(outputs).to_csv("original_outputs_full.csv")
     # preprocess logits and save them on json file
-    bboxes_mat, logits_mat = logits_process(logits)
-    # with open('../bboxes_mat.p', 'wb') as outfile:
+    # otp = np.asarray(outputs)  # temp
+    # df = pd.DataFrame(otp)
+    # df.to_csv('otp.csv', index=False)
+
+    # bboxes_mat, labels_mat, logits_mat = logits_process(logits)
+
+    # save labels, boxes and logits
+    # with open('bboxes_mat.p', 'wb') as outfile:
     #     pickle.dump(bboxes_mat, outfile)
-    # with open('../logits_mat.p', 'wb') as outfile2:
-    #     pickle.dump(logits_mat, outfile2)
-    gt_list = []
-    results_per_image = []
-    for i, data in enumerate(data_loader):  # original script in test_lvis_tnorm.py
-        # if i > 3:   # temporary condition for testing
-        #     break
-        print(i)
-        img_id = dataset.img_infos[i]['id']
-        gt = dataset.get_ann_info(i)
-        gt_dict = dict()
-        gt_dict['id'] = img_id
-        gt_dict['bboxes'] = gt['bboxes']
-        gt_dict['labels'] = gt['labels']
-        gt_list.append(gt_dict)
-        # filter logits according to equivalent ground truth
-        results = filter_logits_by_gt(bboxes_mat[i], logits_mat[i], gt_list[i])
-        results_per_image.append(results)
-    with open('../bboxes_logits.p', 'wb') as outfile:
-        pickle.dump(results_per_image, outfile)
+    # with open('test_logits/labels_mat.p', 'wb') as outfile:
+    #     pickle.dump(labels_mat, outfile)
+    # with open('logits_mat1.p', 'wb') as outfile:
+    #     pickle.dump(logits_mat[:1000], outfile)
+    # with open('logits_mat2.p', 'wb') as outfile:
+    #     pickle.dump(logits_mat[1000:2000], outfile)
+    # with open('logits_mat3.p', 'wb') as outfile:
+    #     pickle.dump(logits_mat[2000:3000], outfile)
+    # with open('logits_mat4.p', 'wb') as outfile:
+    #     pickle.dump(logits_mat[3000:4000], outfile)
+    # with open('logits_mat5.p', 'wb') as outfile:
+    #     pickle.dump(logits_mat[4000:], outfile)
+
+    # filter detections by iou with gt (for dragon training)
+    # gt_list = []
+    # results_per_image = []
+    # for i, data in enumerate(data_loader):  # original script in test_lvis_tnorm.py
+    #     # if i < TEMP_DATASET_SIZE*args.data_index:
+    #     #     continue
+    #     if i >= TEMP_DATASET_SIZE:   # temporary condition for testing
+    #         break
+    #     print(i)
+    #     img_id = dataset.img_infos[i]['id']
+    #     gt = dataset.get_ann_info(i)
+    #     gt_dict = dict()
+    #     gt_dict['id'] = img_id
+    #     gt_dict['bboxes'] = gt['bboxes']
+    #     gt_dict['labels'] = gt['labels']
+    #     gt_list.append(gt_dict)
+    #     # filter logits according to equivalent ground truth.
+    #     # after filtering, for each image we get a list of classes_num, where the total num of bboxes equals gt number
+    #     results = filter_logits_by_gt(bboxes_mat[i], logits_mat[i], gt_list[i])
+    #     results_per_image.append(results)
+    # with open(f'bboxes_logits_train_{args.data_index}.p', 'wb') as outfile:
+    #     pickle.dump(results_per_image, outfile)
+    # print('saved')
+
+    # evaluation:
     rank, _ = get_dist_info()
     if args.out and rank == 0:
         print('\nwriting results to {}'.format(args.out))
@@ -298,8 +337,8 @@ def main():
                 lvis_eval(result_file, eval_types, dataset.lvis)
             else:
                 if not isinstance(outputs[0], dict):
-                    result_files = results2json(dataset, outputs, args.out)
-                    lvis_eval(result_files, eval_types, dataset.lvis)
+                    result_files = results2json(dataset, outputs, args.out, args.data_index)
+                    lvis_eval(result_files, eval_types, dataset.lvis, max_dets=300)
                 else:
                     for name in outputs[0]:
                         print('\nEvaluating {}'.format(name))

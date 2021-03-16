@@ -132,13 +132,15 @@ def proposal2json(dataset, results):
     return json_results
 
 
-def det2json(dataset, results):
+def det2json(dataset, results, data_index=0):
     json_results = []
     for idx in range(len(dataset)):
-        # if idx > 3:  # temporary condition for testing
+        # if idx < 10000*data_index:
+        #     continue
+        # if idx >= 10000*(data_index+1):   # temporary condition for testing
         #     break
         img_id = dataset.img_ids[idx]
-        result = results[idx]
+        result = results[idx]  # original results[idx]
         for label in range(len(result)):
             bboxes = result[label]
             for i in range(bboxes.shape[0]):
@@ -188,10 +190,10 @@ def segm2json(dataset, results):
     return bbox_json_results, segm_json_results
 
 
-def results2json(dataset, results, out_file):
+def results2json(dataset, results, out_file, data_index=0):
     result_files = dict()
     if isinstance(results[0], list):
-        json_results = det2json(dataset, results)
+        json_results = det2json(dataset, results, data_index)
         result_files['bbox'] = '{}.{}.json'.format(out_file, 'bbox')
         result_files['proposal'] = '{}.{}.json'.format(out_file, 'bbox')
         mmcv.dump(json_results, result_files['bbox'])

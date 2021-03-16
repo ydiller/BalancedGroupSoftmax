@@ -13,7 +13,7 @@ import pycocotools.mask as mask_utils
 import pdb
 
 class LVISEval:
-    def __init__(self, lvis_gt, lvis_dt, iou_type="segm"):
+    def __init__(self, lvis_gt, lvis_dt, iou_type="segm", max_dets=300):
         """Constructor for LVISEval.
         Args:
             lvis_gt (LVIS class instance, or str containing path of annotation file)
@@ -36,7 +36,7 @@ class LVISEval:
         if isinstance(lvis_dt, LVISResults):
             self.lvis_dt = lvis_dt
         elif isinstance(lvis_dt, (str, list)):
-            self.lvis_dt = LVISResults(self.lvis_gt, lvis_dt)
+            self.lvis_dt = LVISResults(self.lvis_gt, lvis_dt, max_dets)
         else:
             raise TypeError("Unsupported type {} of lvis_dt.".format(lvis_dt))
 
@@ -536,15 +536,16 @@ class Params:
         """Params for LVIS evaluation API."""
         self.img_ids = []
         self.cat_ids = []
-        # np.arange causes trouble.  the data point on arange is slightly
+        # np.arange causes trouble.  the data point on arange is slightly  -- original
         # larger than the true value
         self.iou_thrs = np.linspace(
-            0.5, 0.95, np.round((0.95 - 0.5) / 0.05) + 1, endpoint=True
+            0.5, 0.95, np.round((0.95 - 0.5) / 0.05).astype(int) + 1, endpoint=True
         )
+        # self.iou_thrs = 0.5
         self.rec_thrs = np.linspace(
-            0.0, 1.00, np.round((1.00 - 0.0) / 0.01) + 1, endpoint=True
+            0.0, 1.00, np.round((1.00 - 0.0) / 0.01).astype(int) + 1, endpoint=True
         )
-        self.max_dets = 300
+        self.max_dets = 300  # original - 300
         self.area_rng = [
             [0 ** 2, 1e5 ** 2],
             [0 ** 2, 32 ** 2],

@@ -101,7 +101,9 @@ test_cfg = dict(
             ignore_iof_thr=-1),
         score_thr=0.0,
         nms=dict(type='nms', iou_thr=0.5),
-        max_per_img=300)
+        max_per_img=300,
+        # dragon_logits=None)  # to use dragon logits: 'test_logits/logits_per_img/smDragon5000/' else: None
+        dragon_logits='test_logits/logits_per_img/smDragon5000/')
     # soft-nms is also supported for rcnn testing
     # e.g., nms=dict(type='soft_nms', iou_thr=0.5, min_score=0.05)
 )
@@ -152,6 +154,11 @@ data = dict(
         type=dataset_type,
         ann_file=data_root + 'lvis_v0.5_val.json',
         img_prefix=data_root + 'val2017/',
+        pipeline=test_pipeline),
+    test_with_train_data=dict(
+        type=dataset_type,
+        ann_file=data_root + 'lvis_v0.5_train.json',
+        img_prefix=data_root + 'train2017/',
         pipeline=test_pipeline))
 # optimizer
 optimizer = dict(type='SGD', lr=0.01, momentum=0.9, weight_decay=0.0001)

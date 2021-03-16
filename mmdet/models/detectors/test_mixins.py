@@ -60,11 +60,13 @@ class BBoxTestMixin(object):
             rescale=rescale,
             cfg=None)
         # cfg=rcnn_test_cfg)
-
+        # changed: det_bboxes includes 6 elements instead of 5. 4 coordinates, score, and also logit index
         det_bboxes, det_labels = multiclass_nms(bboxes, scores,
                                                 rcnn_test_cfg.score_thr,
                                                 rcnn_test_cfg.nms,
-                                                rcnn_test_cfg.max_per_img)
+                                                rcnn_test_cfg.max_per_img,
+                                                rcnn_test_cfg.dragon_logits,
+                                                img_meta[0]['filename'].split('/')[-1])
         return det_bboxes, det_labels, scores
 
     def update_scores_with_reweight(self, scores, scores_reweight):

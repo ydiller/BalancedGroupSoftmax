@@ -4,6 +4,7 @@ import sys
 import mmcv
 import numpy as np
 import pickle
+from itertools import repeat
 from mmdet.core import lvis_eval
 from mmdet.datasets import build_dataloader, build_dataset
 
@@ -84,7 +85,7 @@ def get_iou(boxA, boxB):
 def filter_logits_by_gt(bboxes_mat, logits_mat, ground_truths, iou_threshold=0.5):
     """
     Gets bboxes, logits and ground truths per image on dataset.
-    Filtering boxes so only bboxes with highest iou remains, so bboxes number equals ground truths number.
+    Filtering boxes so only bboxes with highest iou remains, eventually bboxes number equals ground truths number.
     Args: bboxes logits: list of dicts. each dict contains image id, bbox, score, logits.
           ground_truths: a dict that contains image_id, bboxes, labels
     """
@@ -96,10 +97,13 @@ def filter_logits_by_gt(bboxes_mat, logits_mat, ground_truths, iou_threshold=0.5
         filtered_pred_bbox = []
         filtered_pred_logits = []
         current_gt_bboxes = []
+        # include only gt boxes fit to current class c
         [current_gt_bboxes.append(g) for i, g in enumerate(gt_bboxes) if gt_labels[i] == c]  # include only gts from class c
         idx_pred_matched = np.zeros(len(bboxes_mat))
         for gt_bbox in current_gt_bboxes:
             iouMax = sys.float_info.min
+            # for each box among gt boxes, check which prediction has best iou with it.
+            # after the loop save the bbox and logits who fits the gt
             for j, pred in enumerate(bboxes_mat):
                 iou = get_iou(gt_bbox, pred)
                 if iou > iouMax:
@@ -107,12 +111,78 @@ def filter_logits_by_gt(bboxes_mat, logits_mat, ground_truths, iou_threshold=0.5
                     jmax = j
             if iouMax >= iou_threshold:
                 if idx_pred_matched[jmax] == 0:
-                    idx_pred_matched[jmax] = 1 # flag as already seen
+                    idx_pred_matched[jmax] = 1  # flag as already seen
                     filtered_pred_bbox.append(bboxes_mat[jmax])
                     filtered_pred_logits.append(logits_mat[jmax])
         results_per_class.append((filtered_pred_bbox, filtered_pred_logits))
     return results_per_class
 
+def logits2output(logits, boxes, img_ids, targets):
+    """
+    input: lists of logits (num of predictions, num of classes), bboxes (num of predictions, 4) and corresponding img ids.
+    (the input are the files saved by 'extract_logits_and_targets' function).
+    the function rearranges them to be a list of img ids, each cell is a list of 1230.
+    each cell of that list is an array (x, 5) includes bbox coordinates and score for each detection of that class.
+    output: a list that suitable for evaluation by lvis.eval()
+    """
+    # imgs_num = len(set(img_ids))
+    outputs = np.empty((5000, 1230, 0)).tolist()
+    logits = logits.numpy()
+    for i in range(len(logits)):
+        print(f"{i}/{len(logits)}")
+        img_id = img_ids[i]
+        label = np.argmax(logits[i][1:])  # prediction label
+        score = np.max(logits[i][1:])
+        bbox = boxes[i]
+        # target = targets[i]  # gt target
+        pred = np.empty(5)
+        pred[:4] = bbox
+        pred[4] = score
+        # pred[5] = label
+        outputs[img_id][label].append(pred)
+
+    for i in range(len(outputs)):
+        print(f'converting img {i} predictions to ndarray')
+        for j in range(len(outputs[i])):
+            outputs[i][j] = np.array(outputs[i][j])
+
+    return outputs
+
+
+def logits2output_unfiltered(logits, boxes, labels):
+    """
+    input: lists of logits (num of predictions, num of classes), bboxes (num of predictions, 4),
+    where each image has 300 predictions.
+    the function rearranges them to be a list of img ids, each cell is a list of 1230.
+    each cell of that list is an array (x, 5) includes bbox coordinates and score for each detection of that class.
+    output: a list that suitable for evaluation by lvis.eval()
+    """
+    # imgs_num = len(set(img_ids))
+    outputs = np.empty((5000, 1230, 0)).tolist()
+    # logits = logits.numpy()
+    for i in range(logits.shape[0]):
+        print(f"image {i}/{logits.shape[0]}")
+        for j in range(logits.shape[1]):
+            # img_id = i % 300
+            # calc labels using argmax
+            label = np.argmax(logits[i][j][1:])  # prediction label
+            score = np.max(logits[i][j][1:])
+            # use original labels columns from the model
+            # label = int(labels[i][j])
+            # score = logits[i][j][label+1]   # adding 1 because labels where saved without background
+            bbox = boxes[i][j]
+            pred = np.empty(5)
+            pred[:4] = bbox
+            pred[4] = score
+            # pred[5] = label
+            outputs[i][label].append(pred)
+
+    for i in range(len(outputs)):
+        print(f'converting img {i} predictions to ndarray')
+        for j in range(len(outputs[i])):
+            outputs[i][j] = np.array(outputs[i][j])
+
+    return outputs
 
 
 # def main():
